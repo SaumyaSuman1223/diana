@@ -1,0 +1,24 @@
+{
+  "name": "@diana/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@diana/db": "workspace:*",
+    "drizzle-orm": "^0.45.3",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "dotenv": "^18.0.2",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.1"
+  }
+}

@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+/* Calm, information-dense palette (SPEC §64). */
+:root {
+  --bg: #fbfbfa;
+  --surface: #ffffff;
+  --surface-strong: #f0f0ee;
+  --fg: #1c1c1a;
+  --muted: #6b6b66;
+  --line: #e4e4e0;
+  --accent: #3b5bdb;
+  --accent-fg: #ffffff;
+  --danger: #c92a2a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121212;
+    --surface: #1a1a1a;
+    --surface-strong: #262626;
+    --fg: #ececea;
+    --muted: #9a9a94;
+    --line: #2e2e2c;
+    --accent: #748ffc;
+    --accent-fg: #0b0b0b;
+    --danger: #ff8787;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-strong: var(--surface-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+@layer components {
+  .field {
+    @apply rounded-md border border-line bg-surface px-3 py-2 text-sm outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/30;
+  }
+  .btn-primary {
+    @apply rounded-md bg-accent px-4 py-2 text-sm font-medium text-(--accent-fg) hover:opacity-90 focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:outline-none disabled:opacity-60;
+  }
+}
