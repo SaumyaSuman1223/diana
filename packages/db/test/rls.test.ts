@@ -41,9 +41,13 @@ describe("row level security", () => {
   });
 
   it("rejects inserting rows owned by someone else", async () => {
-    await expect(
-      withUser(db, bob, (tx) => tx.insert(projects).values({ ownerId: alice, title: "forged" })),
-    ).rejects.toThrow(/row-level security/);
+    const err = await withUser(db, bob, (tx) =>
+      tx.insert(projects).values({ ownerId: alice, title: "forged" }),
+    ).catch((e: unknown) => e);
+    // drizzle wraps the Postgres error; the RLS message is on `cause`.
+    expect((err as Error | undefined)?.cause).toMatchObject({
+      message: expect.stringMatching(/row-level security/),
+    });
   });
 
   it("does not let users update or delete another user's rows", async () => {

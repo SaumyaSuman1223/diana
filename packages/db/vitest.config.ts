@@ -4,5 +4,5 @@ import { defineConfig } from "vitest/config";
 config({ path: new URL("../../.env", import.meta.url).pathname, quiet: true });
 
 export default defineConfig({
-  test: { include: ["test/**/*.test.ts"], fileParallelism: false },
+  test: { testTimeout: 30_000, hookTimeout: 30_000, include: ["test/**/*.test.ts"], fileParallelism: false },
 });

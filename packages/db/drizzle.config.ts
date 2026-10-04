@@ -1,5 +1,7 @@
-import "dotenv/config";
+import { config } from "dotenv";
 import { defineConfig } from "drizzle-kit";
+
+config({ path: new URL("../../.env", import.meta.url).pathname, quiet: true });
 
 export default defineConfig({
   dialect: "postgresql",
