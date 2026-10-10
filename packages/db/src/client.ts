@@ -10,7 +10,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 export function createDb(url: string, options: { max?: number } = {}) {
   // prepare: false keeps us compatible with Supabase's transaction-mode pooler.
-  const client = postgres(url, { max: options.max ?? 10, prepare: false });
+  // idle_timeout releases connections a paused serverless instance would otherwise hold.
+  const client = postgres(url, { max: options.max ?? 10, prepare: false, idle_timeout: 20 });
   const db: Db = drizzle(client, { schema });
   return { db, close: () => client.end() };
 }

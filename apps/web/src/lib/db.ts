@@ -6,6 +6,8 @@ import { databaseUrl } from "./env";
 const globalForDb = globalThis as unknown as { dianaDb?: Db };
 
 export function getDb(): Db {
-  globalForDb.dianaDb ??= createDb(databaseUrl()).db;
+  // Serverless hosts run many instances; keep each one's pool small (see docs/DEPLOY.md).
+  const max = Number(process.env.DATABASE_POOL_MAX) || undefined;
+  globalForDb.dianaDb ??= createDb(databaseUrl(), { max }).db;
   return globalForDb.dianaDb;
 }

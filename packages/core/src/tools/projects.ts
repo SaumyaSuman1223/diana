@@ -47,3 +47,26 @@ export const listProjects = defineTool({
     return { data: rows };
   },
 });
+
+export const updateProject = defineTool({
+  name: "projects.update",
+  description: "Change a project's title, objective, status or due date. null clears an optional field.",
+  risk: 1,
+  input: z
+    .object({
+      id: z.uuid(),
+      title: z.string().trim().min(1).max(200).optional(),
+      objective: z.string().max(5_000).nullable().optional(),
+      status: z.enum(["active", "paused", "completed", "archived"]).optional(),
+      dueDate: z.iso.date().nullable().optional(),
+    })
+    .refine((v) => Object.keys(v).some((k) => k !== "id" && v[k as keyof typeof v] !== undefined), {
+      message: "Nothing to update",
+    }),
+  async run(ctx, { id, ...patch }) {
+    const [project] = await ctx.tx.update(projects).set(patch).where(eq(projects.id, id)).returning();
+    if (!project) throw notFound("project", id);
+    await ctx.emit("project.updated", { type: "project", id }, { fields: Object.keys(patch) });
+    return { data: project, entity: { type: "project", id } };
+  },
+});

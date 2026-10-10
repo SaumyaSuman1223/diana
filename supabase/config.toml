@@ -243,6 +243,16 @@ otp_expiry = 3600
 # sender_name = "Admin"
 
 # Uncomment to customize email template
+# The sign-in page asks for the code, so both templates must include {{ .Token }}.
+# New users get "confirmation" when email confirmations are on, otherwise "magic_link".
+[auth.email.template.magic_link]
+subject = "Your Diana sign-in code"
+content_path = "./supabase/templates/sign_in.html"
+
+[auth.email.template.confirmation]
+subject = "Your Diana sign-in code"
+content_path = "./supabase/templates/sign_in.html"
+
 # [auth.email.template.invite]
 # subject = "You have been invited"
 # content_path = "./supabase/templates/invite.html"

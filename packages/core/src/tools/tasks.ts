@@ -1,8 +1,8 @@
 import type { Tx } from "@diana/db";
-import { captures, milestones, projects, tasks } from "@diana/db/schema";
+import { captures, milestones, projects, taskDependencies, tasks } from "@diana/db/schema";
 import { and, asc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { invalid, notFound } from "../errors";
+import { DomainError, invalid, notFound } from "../errors";
 import { defineTool } from "./types";
 
 export type Task = typeof tasks.$inferSelect;
@@ -80,6 +80,165 @@ export const completeTask = defineTool({
   },
 });
 
+const updateTaskInput = z
+  .object({
+    id: uuid,
+    title: z.string().trim().min(1).max(500).optional(),
+    notes: z.string().max(20_000).nullable().optional(),
+    status: z
+      .enum(["inbox", "todo", "in_progress", "blocked", "cancelled"])
+      .optional()
+      .describe("Use tasks.complete to mark done. Setting a status on a done task reopens it."),
+    priority: z.number().int().min(1).max(4).optional().describe("1 = highest, 4 = lowest"),
+    dueAt: z.iso.datetime({ offset: true }).nullable().optional(),
+    dueDate: z.iso.date().nullable().optional(),
+    estimateMinutes: z.number().int().positive().max(10_000).nullable().optional(),
+    projectId: uuid.nullable().optional(),
+    blockedReason: z.string().max(1_000).nullable().optional(),
+  })
+  .refine((v) => Object.keys(v).some((k) => k !== "id" && v[k as keyof typeof v] !== undefined), {
+    message: "Nothing to update",
+  })
+  .refine((v) => !(v.dueAt && v.dueDate), { message: "Give either dueAt or dueDate, not both" });
+
+export const updateTask = defineTool({
+  name: "tasks.update",
+  description:
+    "Change fields of an existing task. Only pass fields that should change; null clears an optional field.",
+  risk: 1,
+  input: updateTaskInput,
+  async run(ctx, input) {
+    const [existing] = await ctx.tx.select().from(tasks).where(eq(tasks.id, input.id));
+    if (!existing) throw notFound("task", input.id);
+
+    const patch: Partial<typeof tasks.$inferInsert> = {};
+    if (input.title !== undefined) patch.title = input.title;
+    if (input.notes !== undefined) patch.notes = input.notes;
+    if (input.priority !== undefined) patch.priority = input.priority;
+    if (input.estimateMinutes !== undefined) patch.estimateMinutes = input.estimateMinutes;
+    if (input.blockedReason !== undefined) patch.blockedReason = input.blockedReason;
+
+    if (input.status !== undefined) {
+      patch.status = input.status;
+      patch.completedAt = null;
+      if (input.status !== "blocked" && input.blockedReason === undefined) patch.blockedReason = null;
+    }
+
+    // A task has one kind of deadline; setting one clears the other (ADR-007).
+    if (input.dueAt !== undefined) {
+      patch.dueAt = input.dueAt ? new Date(input.dueAt) : null;
+      if (input.dueAt) patch.dueDate = null;
+    }
+    if (input.dueDate !== undefined) {
+      patch.dueDate = input.dueDate;
+      if (input.dueDate) patch.dueAt = null;
+    }
+
+    if (input.projectId !== undefined) {
+      if (input.projectId) await assertProject(ctx.tx, input.projectId);
+      patch.projectId = input.projectId;
+      // A milestone belongs to one project, so moving the task detaches it.
+      if (input.projectId !== existing.projectId) patch.milestoneId = null;
+    }
+
+    const [task] = await ctx.tx.update(tasks).set(patch).where(eq(tasks.id, input.id)).returning();
+    if (!task) throw notFound("task", input.id);
+    await ctx.emit("task.updated", { type: "task", id: task.id }, { fields: Object.keys(patch) });
+    return { data: task, entity: { type: "task", id: task.id } };
+  },
+});
+
+const dependencyInput = z.object({
+  taskId: uuid.describe("The task that has to wait"),
+  dependsOnTaskId: uuid.describe("The task that must be done first"),
+});
+
+export const addDependency = defineTool({
+  name: "tasks.addDependency",
+  description: "Make one task wait for another. Rejects links that would form a cycle.",
+  risk: 1,
+  input: dependencyInput,
+  async run(ctx, { taskId, dependsOnTaskId }) {
+    if (taskId === dependsOnTaskId) throw invalid("A task cannot depend on itself");
+    // Resolve both ends under RLS: foreign keys would accept another user's task id.
+    const found = await ctx.tx
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(inArray(tasks.id, [taskId, dependsOnTaskId]));
+    for (const id of [taskId, dependsOnTaskId]) {
+      if (!found.some((t) => t.id === id)) throw notFound("task", id);
+    }
+    if (await reaches(ctx.tx, dependsOnTaskId, taskId)) {
+      throw new DomainError("conflict", "That dependency would create a cycle");
+    }
+    await ctx.tx
+      .insert(taskDependencies)
+      .values({ ownerId: ctx.userId, taskId, dependsOnTaskId })
+      .onConflictDoNothing();
+    await ctx.emit("task.dependency_added", { type: "task", id: taskId }, { dependsOnTaskId });
+    return { data: { taskId, dependsOnTaskId }, entity: { type: "task", id: taskId } };
+  },
+});
+
+export const removeDependency = defineTool({
+  name: "tasks.removeDependency",
+  description: "Remove a dependency between two tasks. Removing a missing link is a no-op.",
+  risk: 1,
+  input: dependencyInput,
+  async run(ctx, { taskId, dependsOnTaskId }) {
+    const removed = await ctx.tx
+      .delete(taskDependencies)
+      .where(and(eq(taskDependencies.taskId, taskId), eq(taskDependencies.dependsOnTaskId, dependsOnTaskId)))
+      .returning();
+    if (removed.length > 0) {
+      await ctx.emit("task.dependency_removed", { type: "task", id: taskId }, { dependsOnTaskId });
+    }
+    return { data: { taskId, dependsOnTaskId }, entity: { type: "task", id: taskId } };
+  },
+});
+
+export const listDependencies = defineTool({
+  name: "tasks.listDependencies",
+  description: "List every dependency link: which task waits for which.",
+  risk: 0,
+  input: z.object({}),
+  async run(ctx) {
+    const rows = await ctx.tx
+      .select({ taskId: taskDependencies.taskId, dependsOnTaskId: taskDependencies.dependsOnTaskId })
+      .from(taskDependencies);
+    return { data: rows };
+  },
+});
+
+/** True when `target` is reachable from `start` by following "depends on" links. */
+async function reaches(tx: Tx, start: string, target: string): Promise<boolean> {
+  const seen = new Set<string>([start]);
+  let frontier = [start];
+  while (frontier.length > 0) {
+    const edges = await tx
+      .select({ next: taskDependencies.dependsOnTaskId })
+      .from(taskDependencies)
+      .where(inArray(taskDependencies.taskId, frontier));
+    frontier = [];
+    for (const { next } of edges) {
+      if (next === target) return true;
+      if (!seen.has(next)) {
+        seen.add(next);
+        frontier.push(next);
+      }
+    }
+  }
+  return false;
+}
+
+async function assertProject(tx: Tx, projectId: string) {
+  const [project] = await tx
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), notInArray(projects.status, ["archived"])));
+  if (!project) throw notFound("project", projectId);
+}
+
 export const listTasks = defineTool({
   name: "tasks.list",
   description: "List the user's tasks. Defaults to open tasks, highest priority first.",
@@ -142,13 +301,7 @@ async function resolveLinks(
     projectId = milestone.projectId;
   }
 
-  if (projectId) {
-    const [project] = await tx
-      .select({ id: projects.id })
-      .from(projects)
-      .where(and(eq(projects.id, projectId), notInArray(projects.status, ["archived"])));
-    if (!project) throw notFound("project", projectId);
-  }
+  if (projectId) await assertProject(tx, projectId);
 
   return {
     projectId,
