@@ -44,7 +44,7 @@ function LoginFlow({ onRestart }: { onRestart: () => void }) {
   return (
     <form action={verify} className="flex flex-col gap-3">
       <p role="status" className="text-sm text-muted">
-        We emailed a code to {sent.email}. Enter it here, or open the link in that email on this device.
+        We emailed {sent.email}. Type the code from that email here, or open its link on this device.
       </p>
       <input type="hidden" name="email" value={sent.email} />
       <label htmlFor="token" className="text-sm text-muted">
